@@ -23,6 +23,8 @@ avail INT not null DEFAULT 0,
 PRIMARY KEY(book_id),
 KEY(filename),
 KEY(title,format,filesize),
+INDEX(path),
+INDEX(cat_id),
 INDEX(avail,doublicat),
 INDEX(registerdate));
 commit;
@@ -35,7 +37,7 @@ cat_name VARCHAR(64),
 path VARCHAR(1024),
 cat_type INT not null DEFAULT 0,
 PRIMARY KEY(cat_id),
-KEY(cat_name));
+KEY(cat_name,path(256)));
 commit;
 
 drop table if exists authors;
@@ -59,8 +61,8 @@ drop table if exists genres;
 create table genres(
 genre_id INT not null AUTO_INCREMENT,
 genre VARCHAR(32),
-section VARCHAR(32),
-subsection VARCHAR(32),
+section VARCHAR(64),
+subsection VARCHAR(100),
 PRIMARY KEY(genre_id),
 KEY(genre));
 commit;
@@ -85,6 +87,7 @@ drop table if exists bseries;
 create table bseries(
 ser_id INT not NULL,
 book_id INT not NULL,
+ser_no TINYINT UNSIGNED NOT NULL DEFAULT 0,
 PRIMARY KEY(book_id,ser_id),
 INDEX(ser_id));
 commit;
@@ -102,41 +105,84 @@ create table dbver(
 ver varchar(5));
 commit;
 
-insert into dbver(ver) values("0.17");
+insert into dbver(ver) values("0.21");
 commit;
 insert into authors(author_id,last_name,first_name) values(1,"Неизвестный Автор","");
 commit;
 
 DROP PROCEDURE IF EXISTS sp_update_dbl;
 DROP PROCEDURE IF EXISTS sp_newinfo;
+DROP FUNCTION IF EXISTS BOOK_CMPSTR;
+DROP PROCEDURE IF EXISTS sp_mark_dbl;
 DELIMITER //
 
-CREATE PROCEDURE sp_update_dbl()
+CREATE FUNCTION BOOK_CMPSTR(id INT, cmp_type INT)
+RETURNS VARCHAR(512)
 BEGIN
   DECLARE done INT DEFAULT 0;
-  DECLARE id, dbl INT;
-  DECLARE dbl_sav, id_sav INT;
-  DECLARE cur CURSOR FOR select book_id, doublicat from books
-                         where doublicat!=0 and avail!=0 and doublicat not in
-                         (select book_id from books where doublicat=0 and avail=2) order by doublicat, book_id;
+  DECLARE T VARCHAR(256);
+  DECLARE fmt VARCHAR(8) DEFAULT '';
+  DECLARE fsize INT DEFAULT 0;
+  DECLARE AUTHORS VARCHAR(256) DEFAULT '';
+  DECLARE RESULT VARCHAR(512);
+  SELECT GROUP_CONCAT(DISTINCT author_id order by author_id SEPARATOR ':') into AUTHORS from bauthors where book_id=id;
+  IF AUTHORS=NULL THEN
+     SET AUTHORS='';
+  END IF;
+
+  SELECT UPPER(trim(REPLACE(title,' ',''))),format,filesize INTO T,fmt,fsize FROM books WHERE book_id=id;
+  IF T=NULL THEN
+     SET T='';
+  END IF;
+
+  IF cmp_type=1 THEN
+     SET RESULT=CONCAT_WS(':',T,AUTHORS);
+  ELSEIF cmp_type=2 THEN
+     SET RESULT=CONCAT_WS(':',T,fsize,fmt);
+  ELSE
+     SET RESULT='';
+  END IF;
+
+  RETURN RESULT; 
+END //
+
+CREATE PROCEDURE sp_mark_dbl(cmp_type INT)
+BEGIN
+  DECLARE done INT DEFAULT 0;
+  DECLARE idx,prev,current,orig_id INT;
+  DECLARE ids VARCHAR(512);
+  DECLARE cur CURSOR for select GROUP_CONCAT(DISTINCT book_id order by filesize DESC SEPARATOR ':') as ids 
+                      from books where avail<>0 group by BOOK_CMPSTR(book_id,cmp_type) having SUM(IF(doublicat=0,1,0))<>1;
   DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1;
 
-  OPEN cur;
+  IF cmp_type=1 or cmp_type=2 THEN
+     OPEN cur;
 
-  SET dbl_sav=0;
-  SET id_sav=0;
-  WHILE done=0 DO
-    FETCH cur INTO id, dbl;
-    IF dbl_sav!=dbl THEN
-       UPDATE books SET doublicat=0 WHERE book_id=id;
-       SET dbl_sav=dbl;
-       SET id_sav=id;
-    ELSE
-       UPDATE books SET doublicat=id_sav where book_id=id;
-    END IF;
-  END WHILE;
+     WHILE done=0 DO
+       FETCH cur INTO ids;
+       IF done=0 THEN
+          set idx=0;
+          set prev=-1;
+          set current=0;
+          set orig_id=0;
+          WHILE prev<>current DO
+              set prev=current;
+              set idx=idx+1;
+              SELECT CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(ids,':',idx),':',-1) as UNSIGNED) into current;
+              IF prev<>current THEN
+                 UPDATE books SET doublicat=orig_id where book_id=current;
+                 if orig_id=0 THEN SET orig_id=current; END IF;
+              END IF;
+          END WHILE;
+       END IF;
+     END WHILE;  
+     CLOSE cur;
+  END IF;
 
-  CLOSE cur;
+  IF cmp_type=3 THEN
+     UPDATE books SET doublicat=0;
+  END IF;
+
 END //
 
 CREATE PROCEDURE sp_newinfo(period INT)

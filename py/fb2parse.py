@@ -1,10 +1,10 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import sopdsparse
 import base64
 
-f=open('372716.fb2','rb')
+f=open('105863.fb2','rb')
 parser=sopdsparse.fb2parser(True)
 parser.parse(f)
 print("Errorstr= ",parser.parse_errormsg)
